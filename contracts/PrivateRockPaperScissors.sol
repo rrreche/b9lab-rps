@@ -4,12 +4,13 @@ pragma solidity >= 0.5.0 <0.6.0;
 import "./Pausable.sol";
 import "./Balances.sol";
 
-contract PrivateRockPaperScissors is Pausable, Balances {
+contract RockPaperScissors is Pausable, Balances {
 
   enum Hand {NULL, ROCK, PAPER, SCISSORS}
 
   struct Game {
     Hand secondPlayerHand;
+    uint88 timeout; // We make sure that secondPlayerHand, timeout and address are tightly packed, making it 32 bytes
     address secondPlayer;
     uint256 stake;
     uint256 deadline;
@@ -60,24 +61,18 @@ contract PrivateRockPaperScissors is Pausable, Balances {
     @param bytes32 hashedHand is a hash obtained by calling hashHand() that will act as key.
 
   */
-  function createMatch(bytes32 hashedHand) public payable mustBeRunning mustBeAlive returns (bytes32) {
-    uint256 deadline = now.add(1 days);
+  function createMatch(bytes32 hashedHand, uint88 timeoutInHours) public payable mustBeRunning mustBeAlive returns (bytes32) {
+    require(timeoutInHours > 0, "Timeout must be at least 1 hour");
+    uint256 deadline = now.add(uint256(timeoutInHours).mul(1 hours));
     require(games[hashedHand].deadline == 0, "Password used");
 
     uint256 stake = msg.value;
 
-    // We need even values so that we can return the stake safely in resolveMatch()
-    // and the total stake is perfectly divisible in 3 parts: creator's incentive, creator's stake,
-    // and second player's stake.
-    if(stake % 2 == 1){
-      increaseBalance(msg.sender, 1);
-      stake.sub(1);
-    }
-
     games[hashedHand] = Game({
+      secondPlayerHand: Hand.NULL,
+      timeout: timeoutInHours,
       secondPlayer: address(0),
       deadline: deadline,
-      secondPlayerHand: Hand.NULL,
       stake: stake
     });
 
@@ -96,11 +91,11 @@ contract PrivateRockPaperScissors is Pausable, Balances {
     require(deadline != 0, "Game does not exist");
     require(now < deadline, "Deadline passed");
     uint256 stake = games[firstPlayerHashedHand].stake;
-    require(stake.div(2) == msg.value, "Invalid stake");
+    require(stake == msg.value, "Invalid stake");
     require(secondPlayerClearHand != Hand.NULL, "Invalid hand");
     require(games[firstPlayerHashedHand].secondPlayer == address(0), "Match contested by another player");
 
-    deadline = now.add(1 days);
+    deadline = now.add(uint256(games[firstPlayerHashedHand].timeout).mul(1 hours));
     stake = stake.add(msg.value);
 
     games[firstPlayerHashedHand].secondPlayer = msg.sender;
@@ -133,17 +128,17 @@ contract PrivateRockPaperScissors is Pausable, Balances {
 
     Hand secondPlayerHand = games[hashedHand].secondPlayerHand;
 
-    if(firstPlayerHand == secondPlayerHand) { // Tie
-      firstPlayerWage = (stake.div(3)).mul(2);
+    if(firstPlayerHand == secondPlayerHand) { // Tie, we divide stake into two
+      firstPlayerWage = stake.div(2);
     } else {
       // Explanation:
       // ROCK (0) => PAPER (1) => SCISSOR (2) => ROCK (0)
       // If player 1 is to the right of player 2, he wins. Otherwise, he loses.
       winner = uint8(firstPlayerHand) == ((uint8(secondPlayerHand) + 1) % 3) ? msg.sender : secondPlayer;
-      firstPlayerWage = msg.sender == winner ? stake : stake.div(3);
+      firstPlayerWage = msg.sender == winner ? stake : 0;
     }
 
-    secondPlayerWage = stake.sub(firstPlayerWage);
+    secondPlayerWage = stake.sub(firstPlayerWage); // Player 2 will get the remaining stake
 
     zeroOutGameEntry(hashedHand);
 
