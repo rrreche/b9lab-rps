@@ -4,7 +4,7 @@ pragma solidity >= 0.5.0 <0.6.0;
 import "./Pausable.sol";
 import "./Balances.sol";
 
-contract PrvateRockPaperScissors is Pausable, Balances {
+contract PrivateRockPaperScissors is Pausable, Balances {
 
   enum Hand {NULL, ROCK, PAPER, SCISSORS}
 
@@ -20,7 +20,6 @@ contract PrvateRockPaperScissors is Pausable, Balances {
   event LogMatchCreated(
     address indexed sender,
     bytes32 indexed gameId,
-    address indexed secondPlayer,
     uint256 stake,
     uint256 deadline
   );
@@ -53,18 +52,15 @@ contract PrvateRockPaperScissors is Pausable, Balances {
 
   constructor(bool startPaused) Pausable(startPaused) public {}
 
-
   /*
     @dev: This function lets a player create a match. He / she must specify the challenged address
     and a hidden hand that will act as game ID (key to the mapping)
 
     @param secondPlayer address is the challenged player's address
     @param bytes32 hashedHand is a hash obtained by calling hashHand() that will act as key.
-    
-  */
-  function createMatch(address secondPlayer, bytes32 hashedHand) public payable mustBeRunning mustBeAlive returns (bytes32) {
-    require(secondPlayer != address(0), "Player cannot be zero address");
 
+  */
+  function createMatch(bytes32 hashedHand) public payable mustBeRunning mustBeAlive returns (bytes32) {
     uint256 deadline = now.add(1 days);
     require(games[hashedHand].deadline == 0, "Password used");
 
@@ -79,18 +75,17 @@ contract PrvateRockPaperScissors is Pausable, Balances {
     }
 
     games[hashedHand] = Game({
-      secondPlayer: secondPlayer,
+      secondPlayer: address(0),
       deadline: deadline,
       secondPlayerHand: Hand.NULL,
       stake: stake
     });
 
-    emit LogMatchCreated(msg.sender, hashedHand, secondPlayer, stake, deadline);
+    emit LogMatchCreated(msg.sender, hashedHand, stake, deadline);
   }
 
   /*
-    @dev: This function lets a challenged player accept the match.
-    Only the specified player can accept it.
+    @dev: This function lets a player accept the match
 
     @param firstPlayerHashedHand bytes32 is the game key
     @param hand Hand the weapon choice
@@ -100,14 +95,15 @@ contract PrvateRockPaperScissors is Pausable, Balances {
     uint256 deadline = games[firstPlayerHashedHand].deadline;
     require(deadline != 0, "Game does not exist");
     require(now < deadline, "Deadline passed");
-    require(games[firstPlayerHashedHand].secondPlayer == msg.sender, "Invalid sender");
     uint256 stake = games[firstPlayerHashedHand].stake;
     require(stake.div(2) == msg.value, "Invalid stake");
     require(secondPlayerClearHand != Hand.NULL, "Invalid hand");
+    require(games[firstPlayerHashedHand].secondPlayer == address(0), "Match contested by another player");
 
     deadline = now.add(1 days);
     stake = stake.add(msg.value);
 
+    games[firstPlayerHashedHand].secondPlayer = msg.sender;
     games[firstPlayerHashedHand].secondPlayerHand = secondPlayerClearHand;
     games[firstPlayerHashedHand].stake = stake;
     games[firstPlayerHashedHand].deadline = deadline;
@@ -125,10 +121,7 @@ contract PrvateRockPaperScissors is Pausable, Balances {
   function resolveMatch(Hand firstPlayerHand, uint256 secret) public {
     bytes32 hashedHand = hashHand(firstPlayerHand, secret);
     address secondPlayer = games[hashedHand].secondPlayer;
-    require(secondPlayer != address(0), "Invalid game ID");
-
-    Hand secondPlayerHand = games[hashedHand].secondPlayerHand;
-    require(uint8(secondPlayerHand) != 0, "Player has not moved yet");
+    require(secondPlayer != address(0), "Player two has not joined yet");
 
     uint256 deadline = games[hashedHand].deadline;
     require(now < deadline, "Deadline passed");
@@ -137,6 +130,8 @@ contract PrvateRockPaperScissors is Pausable, Balances {
     uint256 firstPlayerWage;
     uint256 secondPlayerWage;
     address winner;
+
+    Hand secondPlayerHand = games[hashedHand].secondPlayerHand;
 
     if(firstPlayerHand == secondPlayerHand) { // Tie
       firstPlayerWage = (stake.div(3)).mul(2);
@@ -236,6 +231,13 @@ contract PrvateRockPaperScissors is Pausable, Balances {
     games[gameId].stake = 0;
   }
 
+  /*
+    @dev: This function is the default callback for the contract.
 
+    We do not want to accept any ether if not by the appropiate methods, so we revert by default
+  */
+  function() external {
+    revert();
+  }
 
 }
