@@ -16,6 +16,8 @@ contract RockPaperScissors is Pausable, Balances {
     uint256 deadline;
   }
 
+  // The bytes32 key is a hash comprising the creator's hand for the game and a secret.
+  // This way we save storage space, as we do not need to store the secret hand in Game's struct.
   mapping(bytes32 => Game) games;
 
   event LogMatchCreated(
@@ -29,6 +31,12 @@ contract RockPaperScissors is Pausable, Balances {
     address indexed sender,
     bytes32 indexed gameId,
     uint256 stake,
+    uint256 deadline
+  );
+
+  event LogHandShown(
+    address indexed sender,
+    bytes32 indexed gameId,
     uint256 deadline,
     Hand hand
   );
@@ -54,6 +62,15 @@ contract RockPaperScissors is Pausable, Balances {
   constructor(bool startPaused) Pausable(startPaused) public {}
 
   /*
+    @dev: This function is the default callback for the contract.
+
+    We do not want to accept any ether if not by the appropiate methods, so we revert by default
+  */
+  function() external {
+    revert();
+  }
+
+  /*
     @dev: This function lets a player create a match. He / she must specify the challenged address
     and a hidden hand that will act as game ID (key to the mapping)
 
@@ -62,6 +79,7 @@ contract RockPaperScissors is Pausable, Balances {
 
   */
   function createMatch(bytes32 hashedHand, uint88 timeoutInHours) public payable mustBeRunning mustBeAlive returns (bytes32) {
+    require(hashedHand != bytes32(0), "Invalid hashed hand");
     require(timeoutInHours > 0, "Timeout must be at least 1 hour");
     uint256 deadline = now.add(uint256(timeoutInHours).mul(1 hours));
     require(games[hashedHand].deadline == 0, "Password used");
@@ -80,30 +98,48 @@ contract RockPaperScissors is Pausable, Balances {
   }
 
   /*
-    @dev: This function lets a player accept the match
+    @dev: This function lets a player join the match
 
     @param firstPlayerHashedHand bytes32 is the game key
-    @param hand Hand the weapon choice
-    @param secret uint256 the secret used to hash the hand
   */
-  function acceptMatch(bytes32 firstPlayerHashedHand, Hand secondPlayerClearHand) public payable {
+  function acceptMatch(bytes32 firstPlayerHashedHand) public payable {
     uint256 deadline = games[firstPlayerHashedHand].deadline;
     require(deadline != 0, "Game does not exist");
     require(now < deadline, "Deadline passed");
     uint256 stake = games[firstPlayerHashedHand].stake;
     require(stake == msg.value, "Invalid stake");
-    require(secondPlayerClearHand != Hand.NULL, "Invalid hand");
     require(games[firstPlayerHashedHand].secondPlayer == address(0), "Match contested by another player");
 
     deadline = now.add(uint256(games[firstPlayerHashedHand].timeout).mul(1 hours));
     stake = stake.add(msg.value);
 
     games[firstPlayerHashedHand].secondPlayer = msg.sender;
-    games[firstPlayerHashedHand].secondPlayerHand = secondPlayerClearHand;
+    games[firstPlayerHashedHand].deadline = deadline;
     games[firstPlayerHashedHand].stake = stake;
+
+    emit LogMatchAccepted(msg.sender, firstPlayerHashedHand, stake, deadline);
+
+  }
+
+  /*
+    @dev: This function is the natural extension of acceptMatch(). In this function the second player
+      reveals the hand he picked.
+
+    @param firstPlayerHashedHand bytes32 is the game key
+  */
+  function showHand(bytes32 firstPlayerHashedHand, Hand secondPlayerClearHand) public {
+    require(secondPlayerClearHand != Hand.NULL, "Invalid hand");
+    require(games[firstPlayerHashedHand].secondPlayer == msg.sender, "Invalid player address");
+    require(games[firstPlayerHashedHand].secondPlayerHand == Hand.NULL, "Cannot pick hand twice");
+    uint256 deadline = games[firstPlayerHashedHand].deadline;
+    require(now < deadline, "Deadline passed");
+
+    deadline = now.add(uint256(games[firstPlayerHashedHand].timeout).mul(1 hours));
+
+    games[firstPlayerHashedHand].secondPlayerHand = secondPlayerClearHand;
     games[firstPlayerHashedHand].deadline = deadline;
 
-    emit LogMatchAccepted(msg.sender, firstPlayerHashedHand, stake, deadline, secondPlayerClearHand);
+    emit LogHandShown(msg.sender, firstPlayerHashedHand, deadline, secondPlayerClearHand);
 
   }
 
@@ -115,18 +151,18 @@ contract RockPaperScissors is Pausable, Balances {
   */
   function resolveMatch(Hand firstPlayerHand, uint256 secret) public {
     bytes32 hashedHand = hashHand(firstPlayerHand, secret);
-    address secondPlayer = games[hashedHand].secondPlayer;
-    require(secondPlayer != address(0), "Player two has not joined yet");
+
+    Hand secondPlayerHand = games[hashedHand].secondPlayerHand;
+    require(secondPlayerHand != Hand.NULL, "Player two has not made a move yet");
 
     uint256 deadline = games[hashedHand].deadline;
     require(now < deadline, "Deadline passed");
 
+    address secondPlayer = games[hashedHand].secondPlayer;
     uint256 stake = games[hashedHand].stake;
     uint256 firstPlayerWage;
     uint256 secondPlayerWage;
     address winner;
-
-    Hand secondPlayerHand = games[hashedHand].secondPlayerHand;
 
     if(firstPlayerHand == secondPlayerHand) { // Tie, we divide stake into two
       firstPlayerWage = stake.div(2);
@@ -151,8 +187,8 @@ contract RockPaperScissors is Pausable, Balances {
     );
 
     if(stake > 0)  { // If there was a pool, update the balances
+      increaseBalance(msg.sender, firstPlayerWage);
       increaseBalance(secondPlayer, secondPlayerWage);
-      msg.sender.transfer(firstPlayerWage);
     }
   }
 
@@ -163,8 +199,9 @@ contract RockPaperScissors is Pausable, Balances {
     @param firstPlayerHashedHand the key to the game's mapping
   */
   function punish(bytes32 firstPlayerHashedHand) public {
-    require(games[firstPlayerHashedHand].deadline <= now, "Deadline has not passed");
-    require(games[firstPlayerHashedHand].secondPlayer == msg.sender);
+    require(games[firstPlayerHashedHand].deadline < now, "Deadline has not passed");
+    require(games[firstPlayerHashedHand].secondPlayer == msg.sender, "Only second player can call this function");
+    require(games[firstPlayerHashedHand].secondPlayerHand != Hand.NULL, "You have to show your hand before calling");
 
     uint256 stake = games[firstPlayerHashedHand].stake;
 
@@ -172,11 +209,13 @@ contract RockPaperScissors is Pausable, Balances {
 
     emit LogPunishCalled(msg.sender, firstPlayerHashedHand);
 
-    msg.sender.transfer(stake);
+    if(stake > 0)
+      increaseBalance(msg.sender, stake);
   }
 
   /*
-    @dev: Lets the game's creator recover the stake after the timeout
+    @dev: Lets the game's creator recover the stake after the timeout, and punish the second player if no hand
+        was comitted
 
     @param hand Hand the weapon choice
     @param secret uint256 the secret used to hash the hand
@@ -189,14 +228,15 @@ contract RockPaperScissors is Pausable, Balances {
     // both non-existant games and finished games.
     require(stake > 0, "No stake");
 
-    require(games[hashedHand].deadline <= now, "Deadline has not passed");
+    require(games[hashedHand].deadline < now, "Deadline has not passed");
     require(games[hashedHand].secondPlayerHand != Hand.NULL, "Cannot cancel, game is on");
 
     zeroOutGameEntry(hashedHand);
 
     emit LogCancelCalled(msg.sender, hashedHand);
 
-    msg.sender.transfer(stake);
+    if(stake > 0)
+      increaseBalance(msg.sender, stake);
   }
 
   /*
@@ -212,6 +252,7 @@ contract RockPaperScissors is Pausable, Balances {
   */
   function hashHand(Hand hand, uint256 secret) public view returns (bytes32) {
     require(hand != Hand.NULL, "Null hand");
+    require(secret != 0, "Null secret");
     return keccak256(abi.encodePacked(address(this), msg.sender, hand, secret));
   }
 
@@ -224,15 +265,12 @@ contract RockPaperScissors is Pausable, Balances {
     games[gameId].secondPlayerHand = Hand.NULL;
     games[gameId].secondPlayer = address(0);
     games[gameId].stake = 0;
-  }
+    games[gameId].timeout = 0;
 
-  /*
-    @dev: This function is the default callback for the contract.
-
-    We do not want to accept any ether if not by the appropiate methods, so we revert by default
-  */
-  function() external {
-    revert();
+    // Added this to avoid a situation in which after a game has been resolved and zeroed-out,
+    // a player could call acceptMatch() again. It would not have monetary impact as the stakes would
+    // have been distributed, but it could pollute the events log.
+    games[gameId].deadline = now;
   }
 
 }
