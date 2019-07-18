@@ -18,7 +18,7 @@ contract RockPaperScissors is Pausable, Balances {
 
   // The bytes32 key is a hash comprising the creator's hand for the game and a secret.
   // This way we save storage space, as we do not need to store the secret hand in Game's struct.
-  mapping(bytes32 => Game) games;
+  mapping(bytes32 => Game) public games;
 
   event LogMatchCreated(
     address indexed sender,
@@ -168,9 +168,9 @@ contract RockPaperScissors is Pausable, Balances {
       firstPlayerWage = stake.div(2);
     } else {
       // Explanation:
-      // ROCK (0) => PAPER (1) => SCISSOR (2) => ROCK (0)
+      // ROCK (1) => PAPER (2) => SCISSOR (3) => ROCK(1)
       // If player 1 is to the right of player 2, he wins. Otherwise, he loses.
-      winner = uint8(firstPlayerHand) == ((uint8(secondPlayerHand) + 1) % 3) ? msg.sender : secondPlayer;
+      winner = uint8(firstPlayerHand)-1 == uint8(secondPlayerHand) % 3 ? msg.sender : secondPlayer;
       firstPlayerWage = msg.sender == winner ? stake : 0;
     }
 
@@ -186,10 +186,12 @@ contract RockPaperScissors is Pausable, Balances {
       secondPlayerWage
     );
 
-    if(stake > 0)  { // If there was a pool, update the balances
+    if(firstPlayerWage > 0)
       increaseBalance(msg.sender, firstPlayerWage);
+
+    if(secondPlayerWage > 0)
       increaseBalance(secondPlayer, secondPlayerWage);
-    }
+
   }
 
   /*
@@ -199,9 +201,10 @@ contract RockPaperScissors is Pausable, Balances {
     @param firstPlayerHashedHand the key to the game's mapping
   */
   function punish(bytes32 firstPlayerHashedHand) public {
-    require(games[firstPlayerHashedHand].deadline < now, "Deadline has not passed");
+    require(firstPlayerHashedHand != bytes32(0), "Invalid game key");
     require(games[firstPlayerHashedHand].secondPlayer == msg.sender, "Only second player can call this function");
     require(games[firstPlayerHashedHand].secondPlayerHand != Hand.NULL, "You have to show your hand before calling");
+    require(games[firstPlayerHashedHand].deadline < now, "Deadline has not passed");
 
     uint256 stake = games[firstPlayerHashedHand].stake;
 
@@ -228,8 +231,8 @@ contract RockPaperScissors is Pausable, Balances {
     // both non-existant games and finished games.
     require(stake > 0, "No stake");
 
+    require(games[hashedHand].secondPlayerHand == Hand.NULL, "Cannot cancel, game is on");
     require(games[hashedHand].deadline < now, "Deadline has not passed");
-    require(games[hashedHand].secondPlayerHand != Hand.NULL, "Cannot cancel, game is on");
 
     zeroOutGameEntry(hashedHand);
 

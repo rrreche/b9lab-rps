@@ -17,6 +17,7 @@
  * phrase from a file you've .gitignored so it doesn't accidentally become public.
  *
  */
+require("chai/register-should");
 
 const HDWalletProvider = require("truffle-hdwallet-provider");
 
