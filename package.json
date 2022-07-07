@@ -10,7 +10,7 @@
     "fs-extra": "^8.0.1",
     "gulp": "^4.0.2",
     "gulp-watch": "^5.0.1",
-    "moment": "^2.24.0",
+    "moment": "^2.29.4",
     "openzeppelin-test-helpers": "^0.4.0",
     "truffle-hdwallet-provider": "^1.0.10",
     "web3-utils": "^1.0.0-beta.55"
